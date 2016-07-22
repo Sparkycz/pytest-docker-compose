@@ -1,31 +1,63 @@
 import http.client
-from os import path
 from time import sleep
 import random
-
-from docker import Client as DockerClient
+import subprocess
 import redis
+
+class DockerGroup(object):
+
+    def __init__(self, name, file="docker-compose.yml"):
+        self.name = name
+        self.file = file
+
+    def get_container(self, name):
+        return DockerContainer(self)
+
+    def run(self):
+        subprocess.call(['docker-compose -f {file} -p {name} up -d web'.format(file=self.file, name=self.name)], shell=True)
+
+    def kill(self):
+        subprocess.call("docker-compose -f {file} -p {name} kill".format(file=self.file, name=self.name), shell=True)
+
+class DockerContainer(object):
+
+    def __init__(self, docker_group):
+        self.docker_group = docker_group
+
+    def exposed_port(self, internal_port):
+        file = self.docker_group.file
+        name = self.docker_group.name
+        web_host = subprocess.check_output('docker-compose -f {file} -p {name} port web {port}'.format(file=file, name=name, port=internal_port), shell=True).decode('ascii').strip()
+        return web_host.split(":")[1]
+
+    @property
+    def id(self):
+        file = self.docker_group.file
+        name = self.docker_group.name
+        return subprocess.check_output(['docker-compose -f {file} -p {name} ps -q redis'.format(file=file, name=name)], shell=True).decode('ascii').strip()
+
+    @property
+    def ip(self):
+        return subprocess.check_output(["docker inspect {cid} | grep IPAddress | cut -d '\"' -f 4 | grep . ".format(cid=self.id)], shell=True)
 
 
 class BaseTest:
     def __init__(self, redis_testing_data):
-        self.docker_cli = DockerClient(base_url='unix://var/run/docker.sock')
-        # i wanna run the test more than once at the same time (to avoid to crossing of the services)
-        self.port_tail = random.randrange(99)
         self.redis_testing_data = redis_testing_data
+        id = random.randint(1,100)
+        self.docker_group = DockerGroup(id, './subapp/docker-compose.yml')
 
     def __enter__(self):
-        self._load_redis_instance()
-        self._load_webapp_instance()
+        self.docker_group.run()
+        self._set_redis_instance()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        # kill'em all
-        self.docker_cli.remove_container('redis{}'.format(self.port_tail), force=True)
-        self.docker_cli.remove_container('subapp{}'.format(self.port_tail), force=True)
+        self.docker_group.kill()
 
     def http_test(self, request: tuple):
-        conn = http.client.HTTPConnection("127.0.0.1", port=8000 + self.port_tail)
+        web_container = self.docker_group.get_container('web')
+        conn = http.client.HTTPConnection("127.0.0.1", port=web_container.exposed_port(8000))
 
         while True:
             # ehm.. we've gotta wait for start of the Flask instance
@@ -39,32 +71,16 @@ class BaseTest:
         conn.request(*request)
         return conn.getresponse().read()
 
-    def _load_redis_instance(self):
-        redis_container = self.docker_cli.create_container('redis:latest',
-                                                           ports=[6300 + self.port_tail],
-                                                           name='redis{}'.format(self.port_tail))
-        self.docker_cli.start(redis_container.get('Id'), port_bindings={6379: 6300 + self.port_tail})
-
+    def _set_redis_instance(self):
         while True:
             # ehm.. we've gotta wait for start of the Redis instance
             try:
-                redis_instance = redis.Redis(host='localhost', port=6300 + self.port_tail)
+                redis_container = self.docker_group.get_container('redis')
+                redis_instance = redis.Redis(host=redis_container.ip, port=6379)
                 redis_instance.set('testing_key', self.redis_testing_data)
                 break
             except redis.exceptions.ConnectionError:
                 sleep(0.1)
-
-    def _load_webapp_instance(self):
-        # this 2 lines just build the project subapp - the app will be ready on a local service registry
-        app_path = path.join(path.dirname(path.realpath(__file__)), 'subapp')
-        self.docker_cli.build(path=app_path, rm=True, tag='heureka/subapp')
-
-        host_config = self.docker_cli.create_host_config(links=[('redis{}'.format(self.port_tail), 'redis')])
-        container = self.docker_cli.create_container('heureka/subapp:latest',
-                                                     name='subapp{}'.format(self.port_tail),
-                                                     ports=[8000],
-                                                     host_config=host_config)
-        self.docker_cli.start(container.get('Id'), binds={}, port_bindings={8000: 8000 + self.port_tail})
 
 
 class BaseTest2(BaseTest):
