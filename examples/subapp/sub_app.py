@@ -1,6 +1,9 @@
 from flask import Flask
 from redis import Redis
+
+
 app = Flask(__name__)
+
 
 @app.route("/get-hello")
 def hello():
@@ -9,6 +12,7 @@ def hello():
         return redis_instance.get('testing_key')
     except Exception as e:
         return str(e)
+
 
 @app.route("/ping")
 def ping():
