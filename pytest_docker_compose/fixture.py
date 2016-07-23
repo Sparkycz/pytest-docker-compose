@@ -1,11 +1,12 @@
 import pytest
 import time
-import compose.cli.command
+
+from compose.cli import command
 
 
 class DockerGroup:
     def __init__(self, name, dir):
-        self.project = compose.cli.command.get_project(project_dir=dir, project_name=name)
+        self.project = command.get_project(project_dir=dir, project_name=name)
         self.containers = []
 
     def get_container(self, name):
