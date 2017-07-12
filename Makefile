@@ -1,4 +1,4 @@
-.PHONY: build configcheck clean test
+.PHONY: build clean test
 
 build: .venv
 
@@ -10,4 +10,5 @@ clean:
 	rm -rf $(CURDIR)/.venv
 
 test: build
-	$(CURDIR)/.venv/bin/python -m unittest discover
+	$(CURDIR)/.venv/bin/pip install -r requirements-dev.txt
+	$(CURDIR)/.venv/bin/py.test -l tests
